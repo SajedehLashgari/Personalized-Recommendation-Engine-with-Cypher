@@ -1,0 +1,267 @@
+//Find the actor named "Tom Hanks"
+MATCH (tom {name: "Tom Hanks"}) RETURN tom
+
+
+//Find the movie with title "Cloud Atlas"
+MATCH (cloudAtlas {title: "Cloud Atlas"}) RETURN cloudAtlas
+
+
+//Find 10 people
+MATCH (people:Person) RETURN people.name LIMIT 10
+
+
+//Find movies released in the 1990s
+MATCH (nineties:Movie) WHERE nineties.released >= 1990 AND nineties.released < 2000 RETURN nineties.title
+
+
+//List all Tom Hanks movies
+MATCH (tom:Person {name: "Tom Hanks"})-[:ACTED_IN]->(tomHanksMovies) RETURN tom,tomHanksMovies
+
+
+//Who directed "Cloud Atlas"?
+MATCH (cloudAtlas {title: "Cloud Atlas"})<-[:DIRECTED]-(directors) RETURN directors.name
+
+
+//Tom Hanks' co-actors
+MATCH (tom:Person {name:"Tom Hanks"})-[:ACTED_IN]->(m)<-[:ACTED_IN]-(coActors) RETURN coActors.name
+
+
+//How people are related to "Cloud Atlas"
+MATCH (people:Person)-[relatedTo]-(:Movie {title: "Cloud Atlas"}) RETURN people.name, Type(relatedTo), relatedTo
+
+
+//Movies and actors up to 4 "hops" away from Kevin Bacon
+MATCH (bacon:Person {name:"Kevin Bacon"})-[*1..4]-(hollywood)
+RETURN DISTINCT hollywood
+
+
+//Bacon path, the shortest path of any relationships to Meg Ryan
+MATCH p=shortestPath(
+(bacon:Person {name:"Kevin Bacon"})-[*]-(meg:Person {name:"Meg Ryan"})
+)
+RETURN p
+--------------------------------------------------------------------
+
+//Extend Tom Hanks co-actors, to find co-co-actors who haven't worked with Tom Hanks
+MATCH (tom:Person {name:"Tom Hanks"})-[:ACTED_IN]->(m)<-[:ACTED_IN]-(coActors),
+  (coActors)-[:ACTED_IN]->(m2)<-[:ACTED_IN]-(cocoActors)
+WHERE NOT (tom)-[:ACTED_IN]->()<-[:ACTED_IN]-(cocoActors) AND tom <> cocoActors
+RETURN cocoActors.name AS Recommended, count(*) AS Strength ORDER BY Strength DESC
+
+
+
+//Find someone to introduce Tom Hanks to Tom Cruise
+MATCH (tom:Person {name:"Tom Hanks"})-[:ACTED_IN]->(m)<-[:ACTED_IN]-(coActors),
+  (coActors)-[:ACTED_IN]->(m2)<-[:ACTED_IN]-(cruise:Person {name:"Tom Cruise"})
+RETURN tom, m, coActors, m2, cruise
+
+
+//How many reviews does each Matrix movie have? 
+MATCH (m:Movie)<-[:RATED]-(u:User)
+WHERE m.title CONTAINS "Matrix"
+WITH m.title AS movie, COUNT(*) AS reviews
+RETURN movie, reviews
+ORDER BY reviews DESC
+LIMIT 5;
+
+
+//Products similar to the product you’re looking at now
+MATCH p=(m:Movie {title: "Net, The"})-[:ACTED_IN|:IN_GENRE|:DIRECTED*2]-()
+RETURN p LIMIT 25
+
+
+//"Users who bought this thing, also bought that other thing
+MATCH (m:Movie {title: "Crimson Tide"})<-[:RATED]-(u:User)-[:RATED]->(rec:Movie)
+RETURN rec.title AS recommendation, COUNT(*) AS usersWhoAlsoWatched
+ORDER BY usersWhoAlsoWatched DESC LIMIT 25
+
+
+//Find movies most similar to Inception based on shared genres
+MATCH (m:Movie)-[:IN_GENRE]->(g:Genre)<-[:IN_GENRE]-(rec:Movie)
+WHERE m.title = "Inception"
+WITH rec, COLLECT(g.name) AS genres, COUNT(*) AS commonGenres
+RETURN rec.title, genres, commonGenres
+ORDER BY commonGenres DESC LIMIT 10;
+
+
+// Content recommendation by overlapping genres
+MATCH (u:User {name: "Angelica Rodriguez"})-[r:RATED]->(m:Movie),
+  (m)-[:IN_GENRE]->(g:Genre)<-[:IN_GENRE]-(rec:Movie)
+WHERE NOT EXISTS( (u)-[:RATED]->(rec) )
+WITH rec, [g.name, COUNT(*)] AS scores
+RETURN rec.title AS recommendation, rec.year AS year,
+COLLECT(scores) AS scoreComponents,
+REDUCE (s=0,x in COLLECT(scores) | s+x[1]) AS score
+ORDER BY score DESC LIMIT 10
+
+
+// Find similar movies by common genres
+MATCH (m:Movie) WHERE m.title = "Wizard of Oz, The"
+MATCH (m)-[:IN_GENRE]->(g:Genre)<-[:IN_GENRE]-(rec:Movie)
+WITH m, rec, COUNT(*) AS gs
+OPTIONAL MATCH (m)<-[:ACTED_IN]-(a:Actor)-[:ACTED_IN]->(rec)
+WITH m, rec, gs, COUNT(a) AS as
+OPTIONAL MATCH (m)<-[:DIRECTED]-(d:Director)-[:DIRECTED]->(rec)
+WITH m, rec, gs, as, COUNT(d) AS ds
+RETURN rec.title AS recommendation, (5*gs)+(3*as)+(4*ds) AS score ORDER BY score DESC LIMIT 50
+
+
+//What movies are most similar to Inception based on Jaccard similarity of genres?
+MATCH (m:Movie {title: "Inception"})-[:IN_GENRE]->(g:Genre)<-[:IN_GENRE]-(other:Movie)
+WITH m, other, COUNT(g) AS intersection, COLLECT(g.name) AS i
+MATCH (m)-[:IN_GENRE]->(mg:Genre)
+WITH m,other, intersection,i, COLLECT(mg.name) AS s1
+MATCH (other)-[:IN_GENRE]->(og:Genre)
+WITH m,other,intersection,i, s1, COLLECT(og.name) AS s2
+WITH m,other,intersection,s1,s2
+WITH m,other,intersection,s1+filter(x IN s2 WHERE NOT x IN s1) AS union, s1, s2
+RETURN m.title, other.title, s1,s2,((1.0*intersection)/SIZE(union)) AS jaccard ORDER BY jaccard DESC LIMIT 50
+
+
+
+//We can apply this same approach to all "traits" of the movie (genre, actors, directors, etc.):
+MATCH (m:Movie {title: "Inception"})-[:IN_GENRE|:ACTED_IN|:DIRECTED]-(t)<-[:IN_GENRE|:ACTED_IN|:DIRECTED]-(other:Movie)
+WITH m, other, COUNT(t) AS intersection, COLLECT(t.name) AS i
+MATCH (m)-[:IN_GENRE|:ACTED_IN|:DIRECTED]-(mt)
+WITH m,other, intersection,i, COLLECT(mt.name) AS s1
+MATCH (other)-[:IN_GENRE|:ACTED_IN|:DIRECTED]-(ot)
+WITH m,other,intersection,i, s1, COLLECT(ot.name) AS s2
+WITH m,other,intersection,s1,s2
+WITH m,other,intersection,s1+filter(x IN s2 WHERE NOT x IN s1) AS union, s1, s2
+RETURN m.title, other.title, s1,s2,((1.0*intersection)/SIZE(union)) AS jaccard ORDER BY jaccard DESC LIMIT 50
+
+
+// Show all ratings by Misty Williams
+MATCH (u:User {name: "Misty Williams"})
+MATCH (u)-[r:RATED]->(m:Movie)
+RETURN *;
+
+
+// Find Misty’s average rating
+MATCH (u:User {name: "Misty Williams"})
+MATCH (u)-[r:RATED]->(m:Movie)
+RETURN avg(r.rating) AS average;
+
+
+// What are the movies that Misty liked more than average?
+MATCH (u:User {name: "Misty Williams"})
+MATCH (u)-[r:RATED]->(m:Movie)
+WITH u, avg(r.rating) AS average
+MATCH (u)-[r:RATED]->(m:Movie)
+WHERE r.rating > average
+RETURN *;
+
+
+//Simple Collaborative Filtering
+MATCH (u:User {name: "Cynthia Freeman"})-[:RATED]->(:Movie)<-[:RATED]-(o:User)
+MATCH (o)-[:RATED]->(rec:Movie)
+WHERE NOT EXISTS( (u)-[:RATED]->(rec) )
+RETURN rec.title, rec.year, rec.plot
+LIMIT 25
+
+
+//Simple Collaborative Filtering
+MATCH (u:User {name: "Cynthia Freeman"})-[:RATED]->(:Movie)<-[:RATED]-(o:User)
+MATCH (o)-[:RATED]->(rec:Movie)
+WHERE NOT EXISTS( (u)-[:RATED]->(rec) )
+RETURN rec.title, rec.year, rec.plot
+LIMIT 25
+
+
+//what genres have a higher-than-average rating?
+MATCH (u:User {name: "Andrew Freeman"})-[r:RATED]->(m:Movie)
+WITH u, avg(r.rating) AS mean
+MATCH (u)-[r:RATED]->(m:Movie)-[:IN_GENRE]->(g:Genre)
+WHERE r.rating > mean
+WITH u, g, COUNT(*) AS score
+MATCH (g)<-[:IN_GENRE]-(rec:Movie)
+WHERE NOT EXISTS((u)-[:RATED]->(rec))
+RETURN rec.title AS recommendation, rec.year AS year, COLLECT(DISTINCT g.name) AS genres, SUM(score) AS sscore
+ORDER BY sscore DESC LIMIT 10
+
+
+// Most similar users using Cosine similarity
+MATCH (p1:User {name: "Cynthia Freeman"})-[x:RATED]->(m:Movie)<-[y:RATED]-(p2:User)
+WITH COUNT(m) AS numbermovies, SUM(x.rating * y.rating) AS xyDotProduct,
+SQRT(REDUCE(xDot = 0.0, a IN COLLECT(x.rating) | xDot + a^2)) AS xLength,
+SQRT(REDUCE(yDot = 0.0, b IN COLLECT(y.rating) | yDot + b^2)) AS yLength,
+p1, p2 WHERE numbermovies > 10
+RETURN p1.name, p2.name, xyDotProduct / (xLength * yLength) AS sim
+ORDER BY sim DESC
+LIMIT 100;
+
+
+//Find the users with the most similar preferences to Cynthia Freeman
+MATCH (p1:User {name: 'Cynthia Freeman'})-[x:RATED]->(movie)<-[x2:RATED]-(p2:User)
+WHERE p2 <> p1
+WITH p1, p2, collect(x.rating) AS p1Ratings, collect(x2.rating) AS p2Ratings
+WHERE size(p1Ratings) > 10
+RETURN p1.name AS from,
+       p2.name AS to,
+       algo.similarity.cosine(p1Ratings, p2Ratings) AS similarity
+ORDER BY similarity DESC
+
+
+//Find users most similar to Cynthia Freeman
+MATCH (u1:User {name:"Cynthia Freeman"})-[r:RATED]->(m:Movie)
+WITH u1, avg(r.rating) AS u1_mean
+MATCH (u1)-[r1:RATED]->(m:Movie)<-[r2:RATED]-(u2)
+WITH u1, u1_mean, u2, COLLECT({r1: r1, r2: r2}) AS ratings WHERE size(ratings) > 10
+MATCH (u2)-[r:RATED]->(m:Movie)
+WITH u1, u1_mean, u2, avg(r.rating) AS u2_mean, ratings
+UNWIND ratings AS r
+WITH sum( (r.r1.rating-u1_mean) * (r.r2.rating-u2_mean) ) AS nom,
+     sqrt( sum( (r.r1.rating - u1_mean)^2) * sum( (r.r2.rating - u2_mean) ^2)) AS denom,
+     u1, u2 WHERE denom <> 0
+RETURN u1.name, u2.name, nom/denom AS pearson
+ORDER BY pearson DESC LIMIT 50
+
+or
+
+MATCH (u1:User {name:"Cynthia Freeman"})-[r:RATED]->(m:Movie)
+WITH u1, avg(r.rating) AS u1_mean
+MATCH (u1)-[r1:RATED]->(m:Movie)<-[r2:RATED]-(u2)
+WITH u1, u1_mean, u2, COLLECT({r1: r1, r2: r2}) AS ratings WHERE size(ratings) > 10
+MATCH (u2)-[r:RATED]->(m:Movie)
+WITH u1, u1_mean, u2, avg(r.rating) AS u2_mean, ratings
+UNWIND ratings AS r
+WITH sum( (r.r1.rating-u1_mean) * (r.r2.rating-u2_mean) ) AS nom,
+     sqrt( sum( (r.r1.rating - u1_mean)^2) * sum( (r.r2.rating - u2_mean) ^2)) AS denom,
+     u1, u2 WHERE denom <> 0
+RETURN u1.name, u2.name, nom/denom AS pearson
+ORDER BY pearson DESC LIMIT 50
+
+
+//kNN movie recommendation using Pearson similarity
+MATCH (u1:User {name:"Cynthia Freeman"})-[r:RATED]->(m:Movie)
+WITH u1, avg(r.rating) AS u1_mean
+MATCH (u1)-[r1:RATED]->(m:Movie)<-[r2:RATED]-(u2)
+WITH u1, u1_mean, u2, COLLECT({r1: r1, r2: r2}) AS ratings WHERE size(ratings) > 10
+MATCH (u2)-[r:RATED]->(m:Movie)
+WITH u1, u1_mean, u2, avg(r.rating) AS u2_mean, ratings
+UNWIND ratings AS r
+WITH sum( (r.r1.rating-u1_mean) * (r.r2.rating-u2_mean) ) AS nom,
+     sqrt( sum( (r.r1.rating - u1_mean)^2) * sum( (r.r2.rating - u2_mean) ^2)) AS denom,
+     u1, u2 WHERE denom <> 0
+WITH u1, u2, nom/denom AS pearson
+ORDER BY pearson DESC LIMIT 10
+MATCH (u2)-[r:RATED]->(m:Movie) WHERE NOT EXISTS( (u1)-[:RATED]->(m) )
+RETURN m.title, SUM( pearson * r.rating) AS score
+ORDER BY score DESC LIMIT 25
+
+
+
+//kNN movie recommendation using Pearson similarity function
+MATCH (u1:User {name: 'Cynthia Freeman'})-[x:RATED]->(movie:Movie)
+WITH u1, algo.similarity.asVector(movie, x.rating) AS u1Vector
+MATCH (u2:User)-[x2:RATED]->(movie:Movie) WHERE u2 <> u1
+WITH u1, u2, u1Vector, algo.similarity.asVector(movie, x2.rating) AS u2Vector
+WHERE size(apoc.coll.intersection([v in u1Vector | v.category], [v in u2Vector | v.category])) > 10
+WITH u1, u2,  algo.similarity.pearson(u1Vector, u2Vector, {vectorType: "maps"}) AS similarity
+ORDER BY similarity DESC
+LIMIT 10
+MATCH (u2)-[r:RATED]->(m:Movie) WHERE NOT EXISTS( (u1)-[:RATED]->(m) )
+RETURN m.title, SUM( similarity * r.rating) AS score
+ORDER BY score DESC LIMIT 25
+
+
